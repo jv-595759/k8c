@@ -43,7 +43,7 @@ k8c_play() {
 		echo -ne "|    k8c" && tput cup $2 $col
 		sleep .2		
 		echo -ne "        " && tput cup $2 $col
-		ps -P $child >/tmp/k8c-error.log 2>&1
+		ps -P $child >/dev/null 2>&1
 	done
 	tput cvvis
 }
@@ -121,22 +121,31 @@ if [[ $rcode -eq 0 ]]
 then
 	echo -e "\xE2\x9C\x94   PASS"
 else
-	echo -e "\xE2\x9D\x8C  FAIL\n\nCan not handle this error, exiting...\n ERROR:\n"
+	echo -e "\xE2\x9D\x8C  FAIL\n\nCan not handle this error, exiting...\n\n ERROR:\n"
 	cat /tmp/k8c-error.log
+	echo 
 	exit 1
 fi
 
 }
 
 #Checking lxd pakage
-style_banner "Searching lxd packages"
+style_banner "Searching mandatory packages"
+
+print_op "Checking jq binary"
+dpkg -l jq >/tmp/k8c-error.log 2>&1 &
+rc_stats
+
+print_op "Checking kubectl binary"
+which kubectl >/tmp/k8c-error.log 2>&1 &
+rc_stats
 
 print_op "Checking lxd binary"
 dpkg -l lxd >/tmp/k8c-error.log 2>&1 &
 rc_stats
 
 print_op "Checking lxc binary"
-dpkg -l lxd >/tmp/k8c-error.log 2>&1 &
+dpkg -l lxc >/tmp/k8c-error.log 2>&1 &
 rc_stats
 
 print_op "Initializing lxd"
@@ -151,11 +160,12 @@ lxc delete --force $(lxc list -c n --format=csv) >/tmp/k8c-error.log 2>&1 &
 rc_stats
 
 print_op "Delete profiles"
-lxc profile delete k8s >/tmp/k8c-error.log 2>&1 && \
-lxc profile delete k8s-lb >/tmp/k8c-error.log 2>&1 && \
-lxc profile delete k8s-master >/tmp/k8c-error.log 2>&1 && \
-lxc profile delete k8s-worker >/tmp/k8c-error.log 2>&1 &
-rc_stats_w 
+for pr in $(lxc profile list -f json | jq .[].name -r)
+do
+	lxc profile delete $pr >/tmp/k8c-error.log 2>&1
+done
+
+rc_stats 
 
 #Base image setup
 style_banner "Creating base image"
@@ -293,6 +303,7 @@ then
     lxc exec kmaster1 -- bash -c "mknod /dev/kmsg c 1 11 && \
 	echo 'mknod /dev/kmsg c 1 11' >> /etc/rc.local && \
 	chmod +x /etc/rc.local && \
+	systemctl start containerd && \
 	kubeadm init --pod-network-cidr=10.244.0.0/16 --control-plane-endpoint $load_balancer_ip:6443 --upload-certs --ignore-preflight-errors=all && \
 	mkdir /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config && \
 	kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml" >/tmp/k8c-error.log 2>&1 &
@@ -314,6 +325,7 @@ then
         lxc exec "kmaster$count" -- bash -c "mknod /dev/kmsg c 1 11 && \
 	    echo 'mknod /dev/kmsg c 1 11' >> /etc/rc.local && \
 	    chmod +x /etc/rc.local && \
+	    systemctl start containerd && \
 	    eval $masterJoinCommand" >/tmp/k8c-error.log 2>&1 &
 	    rc_stats
 
@@ -346,6 +358,7 @@ then
     lxc exec kmaster -- bash -c "mknod /dev/kmsg c 1 11 && \
 	echo 'mknod /dev/kmsg c 1 11' >> /etc/rc.local && \
 	chmod +x /etc/rc.local && \
+	systemctl start containerd && \
 	kubeadm init --pod-network-cidr=10.244.0.0/16 --ignore-preflight-errors=all && \
 	mkdir /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config && \
 	kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml" >/tmp/k8c-error.log 2>&1 &
@@ -392,6 +405,7 @@ do
     lxc exec "kworker$count" -- bash -c "mknod /dev/kmsg c 1 11 && \
     echo 'mknod /dev/kmsg c 1 11' >> /etc/rc.local && \
     chmod +x /etc/rc.local && \
+    systemctl start containerd && \
     eval $joinCommand" >/tmp/k8c-error.log 2>&1 &
 	rc_stats
 
